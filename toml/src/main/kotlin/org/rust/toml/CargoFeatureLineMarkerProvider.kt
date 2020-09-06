@@ -31,8 +31,8 @@ class CargoFeatureLineMarkerProvider : LineMarkerProvider {
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? = null
 
     override fun collectSlowLineMarkers(
-        elements: MutableList<PsiElement>,
-        result: MutableCollection<LineMarkerInfo<PsiElement>>
+        elements: List<PsiElement>,
+        result: MutableCollection<in LineMarkerInfo<*>>
     ) {
         if (!tomlPluginIsAbiCompatible()) return
 

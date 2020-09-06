@@ -320,7 +320,7 @@ private class WorkspaceImpl(
         val enabledByDefault = packages.flatMap { pkg ->
             when (pkg.origin) {
                 WORKSPACE -> emptyList()
-                STDLIB, DEPENDENCY, TRANSITIVE_DEPENDENCY -> pkg.defaultFeatures.map { pkg.findFeature(it) }
+                STDLIB, DEPENDENCY -> pkg.defaultFeatures.map { pkg.findFeature(it) }
             }
         }
         val enabledByUser = userOverriddenFeatures.mapNotNull { (rootDirectory, features) ->
