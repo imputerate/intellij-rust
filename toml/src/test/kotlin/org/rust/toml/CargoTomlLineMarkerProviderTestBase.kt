@@ -22,8 +22,9 @@ abstract class CargoTomlLineMarkerProviderTestBase : RsTestBase() {
 
     private fun markersFrom(text: String): List<Pair<Int, String>> =
         text.lines()
-            .filter { it.contains(MARKER) }
-            .mapIndexed { index, line ->
+            .withIndex()
+            .filter { it.value.contains(MARKER) }
+            .map { (index, line) ->
                 index to line.substringAfter(MARKER).trim()
             }
 

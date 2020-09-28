@@ -11,9 +11,9 @@ import org.rust.WithStdlibAndDependencyRustProjectDescriptor
 @ProjectDescriptor(WithStdlibAndDependencyRustProjectDescriptor::class)
 class CargoFeatureLineMarkerProviderTest : CargoTomlLineMarkerProviderTestBase() {
     fun `test simple features`() = doTestByText("""
-        [features]
-        foo = []  # - Toggle feature `foo`
-        bar = []  # - Toggle feature `bar`
+        [features] # - Configure features
+        foo = []   # - Toggle feature `foo`
+        bar = []   # - Toggle feature `bar`
         foobar = ["foo", "bar"]  # - Toggle feature `foobar`
     """)
 }
