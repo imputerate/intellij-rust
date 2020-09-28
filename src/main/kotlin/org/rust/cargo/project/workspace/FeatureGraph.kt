@@ -13,49 +13,59 @@ enum class FeatureState {
     Enabled,
     Disabled;
 
-    fun toBoolean(): Boolean = when (this) {
-        Enabled -> true
-        Disabled -> false
+    val isEnabled: Boolean
+        get() = when (this) {
+            Enabled -> true
+            Disabled -> false
+        }
+
+    operator fun not(): FeatureState = when (this) {
+        Enabled -> Disabled
+        Disabled -> Enabled
     }
 }
 
-typealias FeatureNode = Node<PackageFeature, Unit>
-
 data class PackageFeature(val pkg: CargoWorkspace.Package, val name: String) : PresentableNodeData {
+
+    val state: FeatureState?
+        get() = pkg.featureState[name]
+
     override val text: String
-        get() = "$pkg.$name"
+        get() = "${pkg.name}/$name"
+
+    override fun toString(): String = text
 }
 
-typealias WorkspaceFeaturesGraph = PresentableGraph<PackageFeature, Unit>
+private typealias FeaturesGraphInner = PresentableGraph<PackageFeature, Unit>
+private typealias FeatureNode = Node<PackageFeature, Unit>
 
 class FeatureGraph private constructor(
-    private val graph: WorkspaceFeaturesGraph,
+    private val graph: FeaturesGraphInner,
     private val featureToNode: Map<PackageFeature, FeatureNode>
 ) {
     /** Applies the specified function [f] to a freshly created [FeaturesView] and returns its state */
-    fun apply(f: FeaturesView.() -> Unit): Map<PackageFeature, FeatureState> =
-        FeaturesView().apply(f).state
-
-    /** Applies the specified function [f] to a freshly created [FeaturesView] and returns its flatten state */
-    fun applyFlat(f: FeaturesView.() -> Unit): Map<String, Map<String, FeatureState>> =
-        FeaturesView().apply(f).stateFlat
+    fun apply(defaultState: FeatureState, f: FeaturesView.() -> Unit): Map<PackageFeature, FeatureState> =
+        FeaturesView(defaultState).apply(f).state
 
     /** Mutable view of a [FeatureGraph] */
-    inner class FeaturesView {
+    inner class FeaturesView(defaultState: FeatureState) {
         val state: MutableMap<PackageFeature, FeatureState> = hashMapOf()
-
-        val stateFlat: MutableMap<String, MutableMap<String, FeatureState>>
-            get() {
-                val map: MutableMap<String, MutableMap<String, FeatureState>> = hashMapOf()
-                for ((feature, state) in state) {
-                    map.getOrPut(feature.pkg.rootDirectory.toString()) { hashMapOf() }[feature.name] = state
-                }
-                return map
-            }
 
         init {
             for (feature in featureToNode.keys) {
-                state[feature] = FeatureState.Disabled
+                state[feature] = defaultState
+            }
+        }
+
+        fun enableAll(features: Iterable<PackageFeature>) {
+            for (feature in features) {
+                enable(feature)
+            }
+        }
+
+        fun disableAll(features: Iterable<PackageFeature>) {
+            for (feature in features) {
+                disable(feature)
             }
         }
 
@@ -70,6 +80,8 @@ class FeatureGraph private constructor(
         }
 
         private fun enableFeatureTransitively(node: FeatureNode) {
+            if (state[node.data] == FeatureState.Enabled) return
+
             state[node.data] = FeatureState.Enabled
 
             for (edge in graph.incomingEdges(node)) {
@@ -79,6 +91,8 @@ class FeatureGraph private constructor(
         }
 
         private fun disableFeatureTransitively(node: FeatureNode) {
+            if (state[node.data] == FeatureState.Disabled) return
+
             state[node.data] = FeatureState.Disabled
 
             for (edge in graph.outgoingEdges(node)) {
@@ -91,7 +105,7 @@ class FeatureGraph private constructor(
 
     companion object {
         fun buildFor(features: Map<PackageFeature, List<PackageFeature>>): FeatureGraph {
-            val graph = PresentableGraph<PackageFeature, Unit>()
+            val graph = FeaturesGraphInner()
             val featureToNode = hashMapOf<PackageFeature, FeatureNode>()
 
             fun addFeatureIfNeeded(feature: PackageFeature) {
@@ -120,6 +134,14 @@ class FeatureGraph private constructor(
         }
 
         val Empty: FeatureGraph
-            get() = FeatureGraph(WorkspaceFeaturesGraph(), emptyMap())
+            get() = FeatureGraph(FeaturesGraphInner(), emptyMap())
     }
+}
+
+fun Map<PackageFeature, FeatureState>.associateByPackageRoot(): Map<PackageRoot, Map<String, FeatureState>> {
+    val map: MutableMap<PackageRoot, MutableMap<String, FeatureState>> = hashMapOf()
+    for ((feature, state) in this) {
+        map.getOrPut(feature.pkg.rootDirectory) { hashMapOf() }[feature.name] = state
+    }
+    return map
 }

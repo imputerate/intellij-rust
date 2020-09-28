@@ -17,9 +17,11 @@ import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.messages.Topic
 import org.rust.cargo.CargoConstants
+import org.rust.cargo.project.model.impl.UserOverriddenFeatures
 import org.rust.cargo.project.settings.rustSettings
 import org.rust.cargo.project.workspace.CargoWorkspace
-import org.rust.cargo.project.workspace.PackageRoot
+import org.rust.cargo.project.workspace.FeatureState
+import org.rust.cargo.project.workspace.PackageFeature
 import org.rust.cargo.toolchain.RustToolchain
 import org.rust.cargo.toolchain.RustcVersion
 import org.rust.ide.notifications.showBalloon
@@ -50,6 +52,8 @@ interface CargoProjectsService {
     fun refreshAllProjects(): CompletableFuture<out List<CargoProject>>
     fun discoverAndRefresh(): CompletableFuture<out List<CargoProject>>
     fun suggestManifests(): Sequence<VirtualFile>
+
+    fun updateFeatures(cargoProject: CargoProject, features: Set<PackageFeature>, newState: FeatureState)
 
     companion object {
         val CARGO_PROJECTS_TOPIC: Topic<CargoProjectsListener> = Topic(
@@ -89,7 +93,7 @@ interface CargoProject : UserDataHolderEx {
 
     val rustcInfo: RustcInfo?
 
-    val userOverriddenFeatures: Map<PackageRoot, Set<String>>
+    val userOverriddenFeatures: UserOverriddenFeatures
 
     val workspaceStatus: UpdateStatus
     val stdlibStatus: UpdateStatus

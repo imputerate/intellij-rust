@@ -7,17 +7,15 @@ package org.rust.cargo.toolchain.impl
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.google.gson.annotations.SerializedName
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.PathUtil
 import org.rust.cargo.CfgOptions
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.cargo.project.workspace.*
 import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.cargo.project.workspace.CargoWorkspace.LibKind
-import org.rust.cargo.project.workspace.CargoWorkspaceData
-import org.rust.cargo.project.workspace.PackageId
-import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.toolchain.BuildScriptMessage
 import org.rust.openapiext.findFileByMaybeRelativePath
 import org.rust.stdext.mapToSet
@@ -102,10 +100,26 @@ object CargoMetadata {
         val edition: String?,
 
         /**
-         * Features available in this package.
+         * Features available in this package (excluding optional dependencies).
          * The entry named "default" defines which features are enabled by default.
          */
-        val features: Map<String, List<String>>
+        val features: Map<String, List<FeatureDep>>,
+
+        /**
+         * Dependencies as they listed in the package `Cargo.toml`, without package resolution or
+         * any additional data.
+         */
+        val dependencies: List<RawDependency>
+    )
+
+    data class RawDependency(
+        /** A `package` name (non-normalized) of the dependency */
+        val name: String,
+        val kind: String?,
+        val target: String?,
+        val optional: Boolean,
+        val uses_default_features: Boolean,
+        val features: List<String>
     )
 
 
@@ -143,7 +157,25 @@ object CargoMetadata {
          */
         val edition: String?,
 
-        val doctest: Boolean?
+        /**
+         * Indicates whether or not
+         * [documentation examples](https://doc.rust-lang.org/rustdoc/documentation-tests.html)
+         * are tested by default by `cargo test`. This is only relevant for libraries, it has
+         * no effect on other targets. The default is `true` for the library.
+         *
+         * See [docs](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#the-doctest-field)
+         */
+        val doctest: Boolean?,
+
+        /**
+         * Specifies which package features the target needs in order to be built. If any of the required
+         * features are not enabled, the target will be skipped. This is only relevant for the `[[bin]]`,
+         * `[[bench]]`, `[[test]]`, and `[[example]]` sections, it has no effect on `[lib]`.
+         *
+         * See [docs](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#the-required-features-field)
+         */
+        @SerializedName("required-features")
+        val required_features: List<String>?
     ) {
         val cleanKind: TargetKind
             get() = when (kind.singleOrNull()) {
@@ -302,7 +334,6 @@ object CargoMetadata {
             )
         val variables = PackageVariables.from(buildPlan)
         val packageIdToNode = project.resolve.nodes.associateBy { it.id }
-
         return CargoWorkspaceData(
             project.packages.mapNotNull { pkg ->
                 // resolve contains all enabled features for each package
@@ -310,26 +341,23 @@ object CargoMetadata {
                 if (resolveNode == null) {
                     LOG.error("Could not find package with `id` '${pkg.id}' in `resolve` section of the `cargo metadata` output.")
                 }
-                //TODO: Maybe run `cargo metadata --no-default-features`?
-                // E.g. not to enable `dep/foo` feature when `foo` is disabled:
-                // - [ ] foo = ["dep/foo"]
-                // Currently, `dep/foo` will be improperly enabled because `foo` is Cargo-enabled by default
-                val defaultFeatures = resolveNode?.features.orEmpty().toSet() // features enabled by Cargo
+                val enabledFeatures = resolveNode?.features.orEmpty().toSet() // features enabled by Cargo
                 val buildScriptMessage = buildScriptsInfo?.get(pkg.id)
-                pkg.clean(fs, pkg.id in members, variables, pkg.features, defaultFeatures, buildScriptMessage)
+                pkg.clean(fs, pkg.id in members, variables, enabledFeatures, buildScriptMessage)
             },
-            project.resolve.nodes.associate { (id, dependencies, deps) ->
-                val dependencySet = if (deps != null) {
-                    deps.mapToSet { (pkgId, name, depKinds) ->
+            project.resolve.nodes.associate { node ->
+                val dependencySet = if (node.deps != null) {
+                    node.deps.mapToSet { (pkgId, name, depKinds) ->
                         val depKindsLowered = depKinds?.map { it.clean() }
                             ?: listOf(CargoWorkspace.DepKindInfo(CargoWorkspace.DepKind.Unclassified))
                         CargoWorkspaceData.Dependency(pkgId, name, depKindsLowered)
                     }
                 } else {
-                    dependencies.mapToSet { CargoWorkspaceData.Dependency(it) }
+                    node.dependencies.mapToSet { CargoWorkspaceData.Dependency(it) }
                 }
-                id to dependencySet
+                node.id to dependencySet
             },
+            project.packages.associate { it.id to it.dependencies },
             project.workspace_root
         )
     }
@@ -338,12 +366,20 @@ object CargoMetadata {
         fs: LocalFileSystem,
         isWorkspaceMember: Boolean,
         variables: PackageVariables,
-        features: Map<String, List<String>>,
-        defaultFeatures: Set<String>,
+        enabledFeatures: Set<String>,
         buildScriptMessage: BuildScriptMessage?
     ): CargoWorkspaceData.Package? {
         val root = checkNotNull(fs.refreshAndFindFileByPath(PathUtil.getParentPath(manifest_path))?.canonicalFile) {
             "`cargo metadata` reported a package which does not exist at `$manifest_path`"
+        }
+
+        val features = features.toMutableMap()
+
+        // Optional dependencies are features implicitly
+        for (dependency in dependencies) {
+            if (dependency.optional && dependency.name !in features) {
+                features[dependency.name] = emptyList()
+            }
         }
 
         val cfgOptions = CfgOptions.parse(buildScriptMessage?.cfgs.orEmpty())
@@ -365,7 +401,7 @@ object CargoMetadata {
             origin = if (isWorkspaceMember) PackageOrigin.WORKSPACE else PackageOrigin.DEPENDENCY,
             edition = edition.cleanEdition(),
             features = features,
-            defaultFeatures = defaultFeatures,
+            enabledFeatures = enabledFeatures,
             cfgOptions = cfgOptions,
             env = env,
             outDirUrl = outDir?.url
@@ -381,7 +417,8 @@ object CargoMetadata {
                 name,
                 makeTargetKind(cleanKind, cleanCrateTypes),
                 edition.cleanEdition(),
-                doctest = doctest ?: true
+                doctest = doctest ?: true,
+                requiredFeatures = required_features.orEmpty()
             )
         }
     }
