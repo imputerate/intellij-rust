@@ -107,11 +107,17 @@ class CfgEvaluator(
         else -> Unknown
     }
 
-    //TODO: Check stdlib features
-    private fun evaluateFeature(name: String): ThreeValuedLogic = when (features[name]) {
-        FeatureState.Enabled -> True
-        FeatureState.Disabled -> False
-        null -> if (packageOptions.isNameValueEnabled("feature", name)) True else Unknown
+    private fun evaluateFeature(name: String): ThreeValuedLogic {
+        if (origin == PackageOrigin.STDLIB) {
+            // We don't have info about std features
+            return Unknown
+        }
+
+        return when (features[name]) {
+            FeatureState.Enabled -> True
+            FeatureState.Disabled -> False
+            null -> if (packageOptions.isNameValueEnabled("feature", name)) True else Unknown
+        }
     }
 
     companion object {

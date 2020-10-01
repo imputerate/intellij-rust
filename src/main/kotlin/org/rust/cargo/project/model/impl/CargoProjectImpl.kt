@@ -216,7 +216,7 @@ open class CargoProjectsServiceImpl(
                     }
                 }
                 FeatureState.Enabled -> {
-                    workspace.features.apply(defaultState = FeatureState.Enabled) {
+                    workspace.featureGraph.apply(defaultState = FeatureState.Enabled) {
                         disableAll(userOverriddenFeatures.getDisabledFeatures(workspace.packages))
                         enableAll(features)
                     }.forEach { (feature, state) ->
@@ -224,13 +224,12 @@ open class CargoProjectsServiceImpl(
                             userOverriddenFeatures.setFeatureState(feature, state)
                         }
                     }
-                    Unit
                 }
             }.exhaustive
         }
     }
 
-    fun modifyProjectFeatures(
+    private fun modifyProjectFeatures(
         cargoProject: CargoProject,
         action: (CargoProject, CargoWorkspace, userOverriddenFeatures: MutableUserOverriddenFeatures) -> Unit
     ) {

@@ -25,6 +25,7 @@ import org.rust.cargo.project.model.CargoProjectsService
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.project.workspace.FeatureState
+import org.rust.cargo.project.workspace.PackageFeature
 import org.rust.cargo.project.workspace.PackageOrigin.WORKSPACE
 import org.rust.cargo.toolchain.RustToolchain.Companion.CARGO_TOML
 import org.rust.ide.icons.RsIcons
@@ -157,7 +158,7 @@ private object ToggleFeatureAction : GutterIconNavigationHandler<PsiElement> {
 
         context.cargoProjectsService.updateFeatures(
             context.cargoProject,
-            setOf(context.cargoPackage.findFeature(featureName)),
+            setOf(PackageFeature(context.cargoPackage, featureName)),
             newState
         )
     }

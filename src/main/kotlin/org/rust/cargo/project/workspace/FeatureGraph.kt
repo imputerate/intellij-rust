@@ -26,10 +26,6 @@ enum class FeatureState {
 }
 
 data class PackageFeature(val pkg: CargoWorkspace.Package, val name: String) : PresentableNodeData {
-
-    val state: FeatureState?
-        get() = pkg.featureState[name]
-
     override val text: String
         get() = "${pkg.name}/$name"
 

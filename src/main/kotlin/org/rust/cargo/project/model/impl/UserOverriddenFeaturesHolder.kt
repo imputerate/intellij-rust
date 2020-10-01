@@ -60,9 +60,9 @@ class UserOverriddenFeaturesHolder(private val project: Project) : PersistentSta
         val cargoProjects = state.getChildren("cargoProject")
 
         loadedUserOverriddenFeatures = cargoProjects.associate { cargoProject ->
-            val projectFile = cargoProject.getAttributeValue("file") ?: ""
+            val projectFile = cargoProject.getAttributeValue("file").orEmpty()
             val features = UserOverriddenFeatures.of(cargoProject.getChildren("package").associate { pkg ->
-                val packageFile = pkg.getAttributeValue("file") ?: ""
+                val packageFile = pkg.getAttributeValue("file").orEmpty()
                 val features = pkg.getChildren("feature").mapNotNullToSet {
                     it.getAttributeValue("name")
                 }

@@ -18,7 +18,7 @@ abstract class UserOverriddenFeatures {
     fun getDisabledFeatures(packages: Iterable<CargoWorkspace.Package>): List<PackageFeature> {
         return packages.flatMap { pkg ->
             userOverriddenFeatures[pkg.rootDirectory]
-                ?.mapNotNull { name -> pkg.findFeature(name).takeIf { it in pkg.features } }
+                ?.mapNotNull { name -> PackageFeature(pkg, name).takeIf { it in pkg.features } }
                 ?: emptyList()
         }
     }

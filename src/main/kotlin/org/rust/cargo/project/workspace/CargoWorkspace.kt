@@ -45,7 +45,7 @@ interface CargoWorkspace {
      */
     val packages: Collection<Package>
 
-    val features: FeatureGraph
+    val featureGraph: FeatureGraph
 
     fun findPackage(name: String): Package? = packages.find { it.name == name || it.normName == name }
 
@@ -94,8 +94,6 @@ interface CargoWorkspace {
         val outDir: VirtualFile?
 
         val featureState: Map<String, FeatureState>
-
-        fun findFeature(name: String): PackageFeature
 
         fun findDependency(normName: String): Target? =
             if (this.normName == normName) libTarget else dependencies.find { it.name == normName }?.pkg?.libTarget
@@ -220,19 +218,18 @@ private class WorkspaceImpl(
         )
     }
 
-    override val features: FeatureGraph by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        // TODO deduplicate PackageFeature
+    override val featureGraph: FeatureGraph by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val wrappedFeatures = hashMapOf<PackageFeature, List<PackageFeature>>()
 
         for (pkg in packages) {
             val pkgFeatures = pkg.rawFeatures
-            for ((feature, deps) in pkgFeatures) {
-                val packageFeature = pkg.findFeature(feature)
+            for (packageFeature in pkg.features) {
                 if (packageFeature in wrappedFeatures) continue
+                val deps = pkgFeatures[packageFeature.name] ?: continue
 
-                val mappedDeps = deps.flatMap { featureDep ->
+                val wrappedDeps = deps.flatMap { featureDep ->
                     when {
-                        featureDep in pkgFeatures -> listOf(pkg.findFeature(featureDep))
+                        featureDep in pkgFeatures -> listOf(PackageFeature(pkg, featureDep))
                         "/" in featureDep -> {
                             val (crateName, name) = featureDep.split('/', limit = 2)
 
@@ -242,9 +239,9 @@ private class WorkspaceImpl(
 
                             if (name in dep.pkg.rawFeatures) {
                                 if (dep.isOptional) {
-                                    listOf(pkg.findFeature(dep.pkg.name), dep.pkg.findFeature(name))
+                                    listOf(PackageFeature(pkg, dep.pkg.name), PackageFeature(dep.pkg, name))
                                 } else {
-                                    listOf(dep.pkg.findFeature(name))
+                                    listOf(PackageFeature(dep.pkg, name))
                                 }
                             } else {
                                 emptyList()
@@ -253,7 +250,7 @@ private class WorkspaceImpl(
                         else -> emptyList()
                     }
                 }
-                wrappedFeatures[packageFeature] = mappedDeps
+                wrappedFeatures[packageFeature] = wrappedDeps
             }
         }
         FeatureGraph.buildFor(wrappedFeatures)
@@ -339,21 +336,9 @@ private class WorkspaceImpl(
     }
 
     override fun withOverriddenFeatures(userOverriddenFeatures: UserOverriddenFeatures): CargoWorkspace {
+        checkFeaturesInference()
         val disabledByUser = userOverriddenFeatures.getDisabledFeatures(packages)
-
-        val featuresState = calculateWorkspaceFeatureState(disabledByUser).associateByPackageRoot()
-
-        if (isUnitTestMode) {
-            // Check that we compute feature state correctly
-            val enabledByCargo = packages.flatMap { pkg ->
-                pkg.cargoEnabledFeatures.map { pkg.findFeature(it) }
-            }
-            for ((feature, state) in calculateWorkspaceFeatureState(emptyList())) {
-                if(feature in enabledByCargo != state.isEnabled) {
-                    error("Feature ${feature.name} in package ${feature.pkg.name} should be ${!state}, but it is $state")
-                }
-            }
-        }
+        val featuresState = inferFeatureState(disabledByUser).associateByPackageRoot()
 
         return WorkspaceImpl(
             manifestPath,
@@ -364,14 +349,14 @@ private class WorkspaceImpl(
         ).withDependenciesOf(this)
     }
 
-    private fun calculateWorkspaceFeatureState(
+    private fun inferFeatureState(
         disabledByUser: List<PackageFeature>
     ): Map<PackageFeature, FeatureState> {
-        val workspaceFeatureState = features.apply(defaultState = FeatureState.Enabled) {
+        val workspaceFeatureState = featureGraph.apply(defaultState = FeatureState.Enabled) {
             disableAll(disabledByUser)
         }
 
-        return features.apply(defaultState = FeatureState.Disabled) {
+        return featureGraph.apply(defaultState = FeatureState.Disabled) {
             for (pkg in packages) {
                 // Enable remained workspace features (transitively)
                 if (pkg.origin == WORKSPACE || pkg.origin == STDLIB) {
@@ -385,10 +370,23 @@ private class WorkspaceImpl(
                 for (dependency in pkg.dependencies) {
                     if (dependency.pkg.origin == WORKSPACE || dependency.pkg.origin == STDLIB) continue
                     if (dependency.areDefaultFeaturesEnabled) {
-                        enable(dependency.pkg.findFeature("default"))
+                        enable(PackageFeature(dependency.pkg, "default"))
                     }
-                    enableAll(dependency.requiredFeatures.map { dependency.pkg.findFeature(it) })
+                    enableAll(dependency.requiredFeatures.map { PackageFeature(dependency.pkg, it) })
                 }
+            }
+        }
+    }
+
+    /** A kind of test for [inferFeatureState]: check that our features inference works the same way as Cargo's */
+    private fun checkFeaturesInference() {
+        if (!isUnitTestMode) return
+        val enabledByCargo = packages.flatMap { pkg ->
+            pkg.cargoEnabledFeatures.map { PackageFeature(pkg, it) }
+        }
+        for ((feature, state) in inferFeatureState(emptyList())) {
+            if (feature in enabledByCargo != state.isEnabled) {
+                error("Feature ${feature.name} in package ${feature.pkg.name} should be ${!state}, but it is $state")
             }
         }
     }
@@ -435,18 +433,19 @@ private class WorkspaceImpl(
             run {
                 val idToPackage = result.packages.associateBy { it.id }
                 idToPackage.forEach { (id, pkg) ->
-                    val deps = data.dependencies[id].orEmpty()
-                    val rawDeps = data.rawDependencies[id].orEmpty()
-                    pkg.dependencies.addAll(deps.mapNotNull { dep ->
+                    val pkgDeps = data.dependencies[id].orEmpty()
+                    val pkgRawDeps = data.rawDependencies[id].orEmpty()
+                    pkg.dependencies += pkgDeps.mapNotNull { dep ->
                         val dependencyPackage = idToPackage[dep.id] ?: return@mapNotNull null
-                        val depName = dep.name ?: (dependencyPackage.libTarget?.normName ?: dependencyPackage.normName)
 
-                        val rawDep = rawDeps.filter { rawDep ->
+                        val rawDep = pkgRawDeps.filter { rawDep ->
                             rawDep.name == dependencyPackage.name && dep.depKinds.any {
                                 it.kind == CargoWorkspace.DepKind.Unclassified ||
                                     it.target == rawDep.target && it.kind.cargoName == rawDep.kind
                             }
                         }
+
+                        val depName = dep.name ?: (dependencyPackage.libTarget?.normName ?: dependencyPackage.normName)
 
                         DependencyImpl(
                             dependencyPackage,
@@ -456,7 +455,7 @@ private class WorkspaceImpl(
                             rawDep.any { it.uses_default_features },
                             rawDep.flatMap { it.features }.toSet()
                         )
-                    })
+                    }
                 }
             }
 
@@ -506,13 +505,10 @@ private class PackageImpl(
 
     override val outDir: VirtualFile? by CachedVirtualFile(outDirUrl)
 
-    override val features: Set<PackageFeature> = rawFeatures.keys.mapToSet { findFeature(it) }
+    override val features: Set<PackageFeature> = rawFeatures.keys.mapToSet { PackageFeature(this, it) }
 
     override val featureState: Map<String, FeatureState>
         get() = workspace.featuresState[rootDirectory] ?: emptyMap()
-
-    override fun findFeature(name: String): PackageFeature =
-        PackageFeature(this, name)
 
     override fun toString() = "Package(name='$name', contentRootUrl='$contentRootUrl', outDirUrl='$outDirUrl')"
 }

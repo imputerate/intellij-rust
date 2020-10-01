@@ -29,7 +29,7 @@ class RsMissingFeaturesInspection : RsLocalInspectionTool() {
             if (dep.pkg.origin == PackageOrigin.WORKSPACE) {
                 for (requiredFeature in dep.requiredFeatures) {
                     if (dep.pkg.featureState[requiredFeature] == FeatureState.Disabled) {
-                        missingFeatures += dep.pkg.findFeature(requiredFeature)
+                        missingFeatures += PackageFeature(dep.pkg, requiredFeature)
                     }
                 }
             }
@@ -40,7 +40,7 @@ class RsMissingFeaturesInspection : RsLocalInspectionTool() {
         if (libTarget != null && target != libTarget) {
             for (requiredFeature in target.requiredFeatures) {
                 if (target.pkg.featureState[requiredFeature] == FeatureState.Disabled) {
-                    missingFeatures += target.pkg.findFeature(requiredFeature)
+                    missingFeatures += PackageFeature(target.pkg, requiredFeature)
                 }
             }
         }
